@@ -30,3 +30,26 @@ tb = isn['value'].find { |v| v['key'] == 'taxable_base' }; tb['display_value'] =
 ## Verificación
 
 La suma de `display_value` de los conceptos (sin `taxable_base`) debe igualar el nuevo `taxable_base`. No tocar `total` si el impuesto ya está bien. El cliente regenera el reporte.
+
+## Variante: concepto con "Grava ISN" activo que no entra a la base
+
+Ticket ejemplo (jul-2026, Safilo, empleado 485010, concepto "Seguro de Retiro" / key `retirement_insurance`): el concepto tiene el check "Grava ISN" activo pero no aparece en la base ni en el reporte.
+
+**Causa (bug de código):** `RegionIsn::Base#calculate_taxable_base` hace `respond_to?("calculate_#{key}") ? send(...) : 0` — cualquier percepción cuya key no tenga un método `calculate_<key>` explícito queda fuera de la base ISN en silencio, sin consultar `integrated_deductions['isn']`. El fix permanente es de desarrollo; por consola solo se parcha el payload de los employee_payrolls afectados.
+
+**Corrección (por cada EP del periodo):**
+
+```ruby
+isn = ep.payload['provisions']['isn']
+tb = isn['value'].find { |v| v['key'] == 'taxable_base' }
+isn['value'].insert(-2, { 'key' => KEY, 'label' => LABEL, 'display_value' => monto })
+tb['display_value'] = (tb['display_value'].to_f + monto).round(2)
+isn['total'] = (isn['total'].to_f + (monto * tasa)).round(2)
+ep.save!
+```
+
+**Notas:**
+- La tasa se deduce del propio payload (`total / taxable_base`; DIF = 4%).
+- Validar el monto contra `ep.employee_perceptions.detect { |p| p.key == KEY }.final_value`, no contra el Excel del cliente.
+- Avisar al cliente que el impuesto del periodo sube.
+- Mientras no haya deploy del fix, repetir el parche cada quincena.
