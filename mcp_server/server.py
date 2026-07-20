@@ -1,22 +1,25 @@
-"""Servidor MCP propio: base de conocimiento de runbooks + índice de resoluciones.
+"""Servidor MCP propio: RAG sobre runbooks, resoluciones y código fuente.
 
 Se ejecuta como subproceso vía stdio (McpToolset + StdioConnectionParams desde
 los agentes ADK). Ver runbooks/README.md y resolutions/README.md para el
-formato de datos.
+formato de datos, y mcp_server/codebase_store.py para el alcance del índice
+de código.
 """
 
 from __future__ import annotations
 
+import sys
+
 from mcp.server.fastmcp import FastMCP
 
-from mcp_server import resolutions_store, runbook_store
+from mcp_server import codebase_store, resolutions_store, runbook_store
 
 mcp = FastMCP("cs-ticket-runbooks")
 
 
 @mcp.tool()
 def search_runbooks(query: str, limit: int = 5) -> list[dict]:
-    """Busca runbooks relevantes por palabras clave (título, tags, cuerpo).
+    """Busca runbooks relevantes por similitud semántica (RAG, embeddings).
 
     Args:
         query: texto o palabras clave del ticket (ej. "movimientos IDSE pendientes lote enviado").
@@ -49,7 +52,7 @@ def get_runbook(runbook_id: str) -> dict:
 
 @mcp.tool()
 def find_similar_tickets(query: str, limit: int = 5) -> list[dict]:
-    """Busca tickets ya resueltos con patrón similar en el índice de resoluciones.
+    """Busca tickets ya resueltos con patrón similar (RAG sobre el índice de resoluciones).
 
     Útil para tickets sin runbook aplicable: puede existir un caso previo
     similar aunque nunca se haya formalizado como runbook.
@@ -63,6 +66,30 @@ def find_similar_tickets(query: str, limit: int = 5) -> list[dict]:
         script_proposed, category, logged_at), ordenadas por relevancia.
     """
     return resolutions_store.search(query, limit=limit)
+
+
+@mcp.tool()
+def search_codebase(query: str, limit: int = 5) -> list[dict]:
+    """Busca fragmentos relevantes del código fuente de saas-rails-api (RAG).
+
+    Indexa modelos, servicios, controllers, queries e interactors del
+    namespace Mexico::, más el schema de la base de datos. Útil cuando el
+    runbook no alcanza y hace falta entender el comportamiento real de un
+    modelo/servicio (ej. qué hace un callback, qué columnas tiene una tabla).
+
+    Args:
+        query: descripción de lo que se busca (ej. "callback que recalcula
+            SDI al guardar un movement de kardex", "columnas de la tabla
+            employee_payrolls").
+        limit: máximo de fragmentos a devolver.
+
+    Returns:
+        Lista de fragmentos (file_path, start_line, end_line, snippet, score),
+        ordenados por relevancia descendente. El código es de solo lectura —
+        nunca asumas que un fragmento retornado está actualizado al segundo,
+        podría haber cambiado desde que se indexó.
+    """
+    return codebase_store.search(query, limit=limit)
 
 
 @mcp.tool()
@@ -82,7 +109,8 @@ def log_resolution(
     Args:
         ticket_id: identificador del ticket (asunto del mail o ID interno).
         diagnosis: resumen del diagnóstico llegado.
-        category: una de "idse", "nomina", "variabilidad", "otro".
+        category: una de "idse_sua", "nomina", "timbrado", "stp",
+            "perfil_empleado", "config_accesos", "otro".
         runbook_id: id del runbook usado, si hubo uno aplicable.
         script_proposed: one-liners propuestos para consola, si corresponde.
 
@@ -100,4 +128,12 @@ def log_resolution(
 
 
 if __name__ == "__main__":
+    # Indexar ANTES de levantar el transporte stdio: el cliente MCP tiene un
+    # timeout corto por tool call, y la primera búsqueda real fallaría si el
+    # índice (~1 min) se construyera recién ahí. Log a stderr — stdout es el
+    # canal del protocolo MCP, no se puede ensuciar con prints.
+    chunk_count = codebase_store.warm_index()
+    print(
+        f"[cs-ticket-runbooks] código indexado: {chunk_count} chunks", file=sys.stderr
+    )
     mcp.run(transport="stdio")

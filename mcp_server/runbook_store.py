@@ -1,16 +1,19 @@
-"""Carga y búsqueda simple (keyword) sobre el repo de runbooks en markdown."""
+"""Carga y búsqueda semántica (RAG, embeddings locales) sobre el repo de runbooks."""
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
+from mcp_server import embeddings
+
 RUNBOOKS_DIR = Path(__file__).resolve().parent.parent / "runbooks"
 
-_WORD_RE = re.compile(r"[a-záéíóúñ0-9_]+", re.IGNORECASE)
+# Cache de embeddings por runbook.id — se recalcula por proceso (reiniciar el
+# servidor MCP recoge cambios en los .md). Evita re-embeber en cada consulta.
+_EMBEDDING_CACHE: dict[str, list[float]] = {}
 
 
 @dataclass
@@ -39,6 +42,9 @@ class Runbook:
             "related": self.related,
             "body": self.body,
         }
+
+    def embedding_text(self) -> str:
+        return f"{self.title}\n{' '.join(self.tags)}\n{self.summary}\n{self.body}"
 
 
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -80,23 +86,32 @@ def get_by_id(runbook_id: str) -> Runbook | None:
     return None
 
 
-def tokenize(text: str) -> set[str]:
-    return {tok.lower() for tok in _WORD_RE.findall(text)}
-
-
-def _score(runbook: Runbook, query_tokens: set[str]) -> int:
-    # Título y tags pesan más que el cuerpo — coincidencias ahí son más específicas.
-    title_tokens = tokenize(runbook.title) | {t.lower() for t in runbook.tags}
-    body_tokens = tokenize(runbook.body) | tokenize(runbook.summary)
-    score = 3 * len(query_tokens & title_tokens) + len(query_tokens & body_tokens)
-    return score
+def _get_embeddings(runbooks: list[Runbook]) -> dict[str, list[float]]:
+    missing = [rb for rb in runbooks if rb.id not in _EMBEDDING_CACHE]
+    if missing:
+        vectors = embeddings.embed([rb.embedding_text() for rb in missing])
+        for rb, vector in zip(missing, vectors, strict=True):
+            _EMBEDDING_CACHE[rb.id] = vector
+    return _EMBEDDING_CACHE
 
 
 def search(query: str, limit: int = 5) -> list[dict]:
-    query_tokens = tokenize(query)
-    if not query_tokens:
+    """Retrieval semántico: similitud coseno entre el embedding de la query y
+    el de cada runbook (título+tags+resumen+cuerpo)."""
+    runbooks = load_all()
+    if not runbooks:
         return []
-    scored = [(_score(rb, query_tokens), rb) for rb in load_all()]
-    scored = [(score, rb) for score, rb in scored if score > 0]
+
+    doc_embeddings = _get_embeddings(runbooks)
+    query_vector = embeddings.embed_one(query)
+
+    scored = [
+        (embeddings.cosine_similarity(query_vector, doc_embeddings[rb.id]), rb)
+        for rb in runbooks
+    ]
     scored.sort(key=lambda pair: pair[0], reverse=True)
-    return [{**rb.to_summary_dict(), "score": score} for score, rb in scored[:limit]]
+    return [
+        {**rb.to_summary_dict(), "score": round(score, 4)}
+        for score, rb in scored[:limit]
+        if score > 0
+    ]

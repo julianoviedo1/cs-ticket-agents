@@ -23,9 +23,18 @@ _session_service = InMemorySessionService()
 _runner = Runner(agent=root_agent, app_name=APP_NAME, session_service=_session_service)
 
 
-async def run_ticket_async(ticket_text: str, session_id: str | None = None) -> str:
-    """Corre el orquestador sobre un ticket; devuelve la respuesta final concatenada."""
+async def run_ticket_async(
+    ticket_text: str, session_id: str | None = None
+) -> tuple[str, str]:
+    """Corre el orquestador sobre un ticket.
+
+    Devuelve (respuesta_final, session_id) — si no se pasó session_id, se
+    genera uno nuevo y se devuelve para que el caller pueda continuar la
+    misma conversación en un siguiente turno (ej. responder un pedido de
+    dato de consola que hizo el agente).
+    """
     session_id = session_id or str(uuid.uuid4())
+    # create_session es no-op seguro si la sesión ya existe (continuar turno).
     await _session_service.create_session(
         app_name=APP_NAME, user_id=USER_ID, session_id=session_id
     )
@@ -41,8 +50,8 @@ async def run_ticket_async(ticket_text: str, session_id: str | None = None) -> s
         if event.is_final_response() and event.content and event.content.parts:
             final_text_parts.append(event.content.parts[0].text or "")
 
-    return "\n".join(final_text_parts)
+    return "\n".join(final_text_parts), session_id
 
 
-def run_ticket(ticket_text: str, session_id: str | None = None) -> str:
+def run_ticket(ticket_text: str, session_id: str | None = None) -> tuple[str, str]:
     return asyncio.run(run_ticket_async(ticket_text, session_id=session_id))

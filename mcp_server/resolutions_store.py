@@ -1,4 +1,4 @@
-"""Índice append-only de tickets resueltos (JSONL) y búsqueda simple sobre él."""
+"""Índice append-only de tickets resueltos (JSONL) y búsqueda semántica (RAG) sobre él."""
 
 from __future__ import annotations
 
@@ -7,11 +7,21 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from mcp_server.runbook_store import tokenize  # reutiliza el mismo tokenizer
+from mcp_server import embeddings
 
 INDEX_PATH = Path(__file__).resolve().parent.parent / "resolutions" / "index.jsonl"
 
-VALID_CATEGORIES = {"idse", "nomina", "variabilidad", "otro"}
+# Debe coincidir con las categorías que usa el orquestador en
+# cs_ticket_agents/agent.py (ver set_ticket_context).
+VALID_CATEGORIES = {
+    "idse_sua",
+    "nomina",
+    "timbrado",
+    "stp",
+    "perfil_empleado",
+    "config_accesos",
+    "otro",
+}
 
 
 @dataclass
@@ -62,21 +72,26 @@ def load_all() -> list[dict]:
 
 
 def search(query: str, limit: int = 5) -> list[dict]:
-    query_tokens = tokenize(query)
-    if not query_tokens:
+    """Retrieval semántico sobre el índice de resoluciones.
+
+    Nota: recalcula embeddings de todas las entradas en cada llamada — bien
+    para el volumen actual (v1), pero si el índice crece mucho conviene
+    cachear como se hizo en runbook_store.py (ver "trabajo futuro" del informe).
+    """
+    entries = load_all()
+    if not entries:
         return []
-    scored = []
-    for entry in load_all():
-        haystack = " ".join(
-            [
-                entry.get("ticket_id", ""),
-                entry.get("diagnosis", ""),
-                entry.get("category", ""),
-            ]
-        )
-        entry_tokens = tokenize(haystack)
-        score = len(query_tokens & entry_tokens)
-        if score > 0:
-            scored.append((score, entry))
+
+    texts = [
+        f"{e.get('ticket_id', '')} {e.get('diagnosis', '')} {e.get('category', '')}"
+        for e in entries
+    ]
+    vectors = embeddings.embed(texts)
+    query_vector = embeddings.embed_one(query)
+
+    scored = [
+        (embeddings.cosine_similarity(query_vector, vector), entry)
+        for vector, entry in zip(vectors, entries, strict=True)
+    ]
     scored.sort(key=lambda pair: pair[0], reverse=True)
-    return [entry for _, entry in scored[:limit]]
+    return [entry for score, entry in scored[:limit] if score > 0]

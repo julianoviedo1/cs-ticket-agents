@@ -20,6 +20,7 @@ dependencies = [
     "google-cloud-pubsub>=2.39.0",
     "google-api-python-client>=2.198.0",
     "google-auth>=2.55.2",
+    "fastembed>=0.8.0",
 ]
 requires-python = ">=3.11,<3.14"
 
@@ -86,7 +87,7 @@ deprecated = "ignore"
 [tool.codespell]
 # Proyecto en español: ignorar palabras en español que codespell (diccionario
 # en inglés) marca como falsos positivos de typos.
-ignore-words-list = "rouge,ser,aplicable,cliente,oficial,variante,varios,dobles,historial,activacion,vas,previos,hace,requiere,asume,te,argumentos"
+ignore-words-list = "rouge,ser,aplicable,cliente,oficial,variante,varios,dobles,historial,activacion,vas,previos,hace,requiere,asume,te,argumentos,pase,valide,responde,relevante,aceptable,visibles,fiel,ignora,comando,falso,componentes,controle,posible,imposible,pares"
 skip = "./locust_env/*,uv.lock,.venv,./frontend,**/package-lock.json"
 
 

@@ -1,13 +1,24 @@
 from google.adk.agents import Agent
 
 from cs_ticket_agents.config import GENERAL_AGENT_MODEL
+from cs_ticket_agents.guardrails import destructive_script_guard
 from cs_ticket_agents.mcp_tools import build_runbooks_toolset
-from cs_ticket_agents.sub_agents.common import SAFETY_RULES
+from cs_ticket_agents.state_tools import record_progress
+from cs_ticket_agents.sub_agents.common import (
+    PROMPT_INJECTION_GUARD,
+    SAFETY_RULES,
+    STATE_CONTEXT,
+)
 from cs_ticket_agents.tools import read_excel
 
 INSTRUCTION = f"""
 Sos el agente de respaldo para tickets de CS de Runa que no encajan claramente
-en IDSE ni en nómina/variabilidad/vacaciones/ISN/timbrado/PTU.
+en ninguno de los subagentes especializados (idse_sua, nomina, timbrado, stp,
+perfil_empleado, config_accesos).
+
+{PROMPT_INJECTION_GUARD}
+
+{STATE_CONTEXT}
 
 {SAFETY_RULES}
 
@@ -19,10 +30,10 @@ Flujo específico para este agente:
    a. Decile al usuario explícitamente que no hay runbook ni caso similar registrado.
    b. Evaluá si este ticket parece un patrón recurrente que ameritaría un
       subagente especializado nuevo, o si encaja mejor como caso adicional
-      dentro de un subagente ya existente (agente_idse o agente_nomina).
+      dentro de un subagente ya existente.
    c. Preguntale directamente al usuario: "¿Preferís que quede reservado como
       candidato a un nuevo subagente de [categoría que vos sugieras], o lo
-      sumamos como caso adicional a agente_idse / agente_nomina?"
+      sumamos como caso adicional a [subagente existente]?"
    d. Registrá la respuesta del usuario con log_resolution (category="otro"),
       incluyendo en diagnosis la categoría sugerida y la decisión tomada. Esto
       queda como insumo para que un desarrollador cree o actualice el subagente
@@ -34,9 +45,10 @@ agente_general = Agent(
     name="agente_general",
     model=GENERAL_AGENT_MODEL,
     description=(
-        "Atiende tickets que no encajan claramente en IDSE o nómina; evalúa "
-        "si ameritan un subagente especializado nuevo."
+        "Atiende tickets que no encajan claramente en los subagentes "
+        "especializados; evalúa si ameritan un subagente nuevo."
     ),
     instruction=INSTRUCTION,
-    tools=[build_runbooks_toolset(), read_excel],
+    tools=[build_runbooks_toolset(), read_excel, record_progress],
+    after_model_callback=destructive_script_guard,
 )

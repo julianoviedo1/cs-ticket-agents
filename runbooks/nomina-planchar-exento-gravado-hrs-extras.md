@@ -1,6 +1,6 @@
 ---
 id: nomina-planchar-exento-gravado-hrs-extras
-title: "Planchar" exento/gravado de horas extras y descanso laborado desde Excel MEC
+title: '"Planchar" exento/gravado de horas extras y descanso laborado desde Excel MEC'
 category: nomina
 tags: [perceptions, isr, exento, gravado, horas-extras, descanso-laborado, plachado]
 summary: Fijar manualmente exento/gravado en el payload de la percepción y recalcular ISR y totales sin dejar que el sistema los recalcule desde cero.

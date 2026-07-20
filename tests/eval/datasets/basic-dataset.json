@@ -1,17 +1,45 @@
 {
   "eval_cases": [
     {
-      "eval_case_id": "greeting",
+      "eval_case_id": "activar_ptu_registro_patronal",
       "prompt": {
         "role": "user",
-        "parts": [{"text": "Hello, what can you help me with?"}]
+        "parts": [
+          {
+            "text": "[Ticket de Chat] Space: Customer support\nDe: Cliente Kuka <cliente@kuka.mx>\n\nHola, el registro patronal de Grupo Kuka necesita activar el módulo de PTU (reparto de utilidades), sub_company 7504. Nos pueden ayudar?"
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "La activación de PTU para un registro patronal se bloquea cuando existe un ProfitSharingPayment de ese sub_company con start_date = 1 de enero del año pasado, end_date = fin de ese año, y status in_progress o finished (los pending no bloquean). Diagnóstico: identificar la sub_company del registro patronal (sc.load_fields_as_attributes(['employer_registration']); sc.employer_registration), y buscar el bloqueante con ProfitSharingPayment.where(sub_company_id: X, start_date: Date.new(año_pasado,1,1), status: %w[in_progress finished]). Corrección: restar 1 año a created_at, updated_at, start_date y end_date del registro bloqueante y guardarlo con save(validate: false) — los cuatro campos, no solo las fechas de rango. Si el bloqueante es finished con report_date, es un PTU real ya pagado: hay que confirmar con el cliente que quiere correr otro del mismo ejercicio (riesgo de duplicar pago)."
+            }
+          ]
+        }
       }
     },
     {
-      "eval_case_id": "weather_query",
+      "eval_case_id": "planchar_horas_extras_exento_gravado",
       "prompt": {
         "role": "user",
-        "parts": [{"text": "What's the weather like in San Francisco?"}]
+        "parts": [
+          {
+            "text": "[Ticket de Chat] Space: Customer support\nDe: Cliente <cliente@empresa.mx>\n\nAdjunto el Excel MEC_Formato plachado de datos_1.xlsx. Necesitamos planchar el exento y gravado de horas extras del empleado con clave EMP123 en la nómina 708862, según los valores del archivo, y que se recalculen ISR y totales."
+          }
+        ]
+      },
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "\"Planchar\" un concepto de nómina significa fijar manualmente los montos que ya calculó el cliente por fuera, sin que el sistema los recalcule desde cero. Para horas extras, hay que ubicar la EmployeePerception con key 'extra_hours' del EmployeePayroll correspondiente y actualizar su payload (double_hours_amount, triple_hours_amount, isr.grava, isr.grava_monthly_with_discounts, isr.exenta, rest_double_to_exempt) según las columnas I-N del Excel. Crítico: hay que fijar también el campo .value = double_hours_amount + triple_hours_amount (no solo el payload), porque los totales de la nómina se calculan sobre .value/.custom_value, no sobre el payload — si solo se actualiza el payload, el ISR queda bien pero los totales de la nómina quedan mal. También poner custom_value = nil si la percepción fue editada en UI. Después de guardar, correr CustomerService::RecalculateEmployeePayrollISR.new(ep).call por empleado, y una sola vez por nómina RegionService::RegionPayrollService#reload_payroll_total_values(true) para actualizar los totales."
+            }
+          ]
+        }
       }
     }
   ]

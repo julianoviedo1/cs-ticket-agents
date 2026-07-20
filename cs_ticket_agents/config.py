@@ -31,7 +31,14 @@ else:
 
 # Prefijos de proveedor que LiteLLM reconoce — cualquier otro string se asume
 # Gemini nativo y se pasa como string simple a Agent(model=...).
-_LITELLM_PREFIXES = ("anthropic/", "openai/", "ollama_chat/", "vertex_ai/", "azure/")
+_LITELLM_PREFIXES = (
+    "anthropic/",
+    "openai/",
+    "ollama_chat/",
+    "vertex_ai/",
+    "azure/",
+    "groq/",
+)
 
 
 def resolve_model(model_str: str) -> str | LiteLlm:
@@ -49,6 +56,14 @@ def resolve_model(model_str: str) -> str | LiteLlm:
 DEFAULT_MODEL = "gemini-flash-latest"
 
 ORCHESTRATOR_MODEL = resolve_model(os.getenv("ORCHESTRATOR_MODEL", DEFAULT_MODEL))
-IDSE_AGENT_MODEL = resolve_model(os.getenv("IDSE_AGENT_MODEL", DEFAULT_MODEL))
+IDSE_SUA_AGENT_MODEL = resolve_model(os.getenv("IDSE_SUA_AGENT_MODEL", DEFAULT_MODEL))
 NOMINA_AGENT_MODEL = resolve_model(os.getenv("NOMINA_AGENT_MODEL", DEFAULT_MODEL))
+TIMBRADO_AGENT_MODEL = resolve_model(os.getenv("TIMBRADO_AGENT_MODEL", DEFAULT_MODEL))
+STP_AGENT_MODEL = resolve_model(os.getenv("STP_AGENT_MODEL", DEFAULT_MODEL))
+PERFIL_EMPLEADO_AGENT_MODEL = resolve_model(
+    os.getenv("PERFIL_EMPLEADO_AGENT_MODEL", DEFAULT_MODEL)
+)
+CONFIG_ACCESOS_AGENT_MODEL = resolve_model(
+    os.getenv("CONFIG_ACCESOS_AGENT_MODEL", DEFAULT_MODEL)
+)
 GENERAL_AGENT_MODEL = resolve_model(os.getenv("GENERAL_AGENT_MODEL", DEFAULT_MODEL))

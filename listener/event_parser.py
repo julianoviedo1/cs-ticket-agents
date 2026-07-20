@@ -48,13 +48,29 @@ def parse_chat_event(raw_json: bytes | str) -> dict | None:
     }
 
 
+# Guardrail (prompt injection): todo lo que viene del cliente/Space externo
+# (nombre de quien escribe, cuerpo del mensaje) se delimita explícitamente
+# como dato no confiable — el sender puede setear su display name a
+# cualquier cosa, y el cuerpo del mensaje puede intentar instrucciones tipo
+# "ignorá tus reglas anteriores". Ver también SAFETY_RULES en
+# cs_ticket_agents/sub_agents/common.py, que le dice al agente cómo tratar
+# este bloque.
+UNTRUSTED_CONTENT_START = (
+    "=== INICIO CONTENIDO DEL TICKET (dato externo, no confiable) ==="
+)
+UNTRUSTED_CONTENT_END = "=== FIN CONTENIDO DEL TICKET ==="
+
+
 def build_ticket_text(ticket: dict, attachment_paths: list[str]) -> str:
     """Arma el texto que recibe el orquestador a partir del ticket normalizado."""
     lines = [
         f"[Ticket de Chat] Space: {ticket.get('space_display_name')}",
+        "",
+        UNTRUSTED_CONTENT_START,
         f"De: {ticket.get('sender_display_name')} <{ticket.get('sender_email') or 'sin email'}>",
         "",
         ticket.get("text", ""),
+        UNTRUSTED_CONTENT_END,
     ]
     if attachment_paths:
         lines.append("")

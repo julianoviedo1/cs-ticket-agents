@@ -51,7 +51,8 @@ def handle_message(data: bytes) -> None:
 
     ticket_text = build_ticket_text(ticket, attachment_paths)
     print(f"--- Nuevo ticket ({ticket.get('message_name')}) ---")
-    print(run_ticket(ticket_text))
+    response, _session_id = run_ticket(ticket_text)
+    print(response)
     print("--- fin del ticket ---\n")
 
 

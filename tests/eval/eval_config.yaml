@@ -1,30 +1,70 @@
 metrics_to_run:
-  - custom_response_quality
+  - multi_turn_tool_use_quality # built-in: ¿llamó a las tools correctas, en un orden razonable?
+  - correctness_vs_golden # LLM as a Judge: ¿el diagnóstico coincide en sustancia con el real?
+  - faithfulness # LLM as a Judge: ¿se basó en el runbook recuperado, o inventó?
 
 custom_metrics:
-  - name: custom_response_quality
+  - name: correctness_vs_golden
     prompt_template: |
-      You are an expert quality assurance evaluator for an enterprise AI assistant. Your task is to evaluate the agent's final response given the user prompt and the full agent trace (for tool-call and reasoning context).
+      Sos un evaluador experto de un sistema de soporte técnico para un SaaS
+      de nómina en México. Tu tarea es comparar la respuesta del agente
+      contra una respuesta de referencia (golden answer) escrita por un
+      humano que resolvió este mismo ticket en la realidad.
 
-      Please grade the response quality on a scale of 1 to 5 according to the following criteria:
-      1 (Poor): The response fails to address the query, contains incorrect information, or is highly confusing.
-      2 (Below Average): The response partially addresses the query but has notable inaccuracies, gaps, or unclear structure.
-      3 (Acceptable): The response adequately answers the query but lacks depth, clear structure, or misses minor details.
-      4 (Good): The response is accurate, well-structured, and covers the query thoroughly with minor room for improvement.
-      5 (Excellent): The response is highly relevant, comprehensive, flawlessly accurate, and excellently structured.
+      No exijas coincidencia textual — el fraseo puede variar. Evaluá si el
+      agente llegó a la MISMA causa raíz y a la MISMA corrección de fondo
+      (mismos modelos/campos involucrados, mismo enfoque de solución), aunque
+      la redacción sea distinta. Si el agente le pidió al usuario un dato de
+      consola antes de completar el diagnóstico, evaluá igual la dirección
+      del razonamiento hasta ese punto — no lo penalices por haber pedido
+      información legítima que le faltaba.
 
-      ### Target Evaluation:
-      User Prompt: {prompt}
-      Final Response: {response}
-      Full Agent Trace: {agent_data}
+      Escala:
+      1 (Incorrecto): causa raíz o corrección distinta a la de referencia, o inventó datos.
+      2 (Parcial): identifica el dominio correcto pero se equivoca en el mecanismo o el campo/modelo específico.
+      3 (Aceptable): llega a una causa raíz razonable y compatible, aunque menos precisa o completa que la referencia.
+      4 (Bueno): coincide en causa raíz y enfoque de corrección con la referencia, con detalles menores distintos.
+      5 (Excelente): equivalente en sustancia a la referencia — mismo diagnóstico, mismos campos/modelos, misma corrección.
 
-      Return your evaluation as a valid JSON object matching this structure:
+      ### Evaluación:
+      Ticket del usuario: {prompt}
+      Respuesta del agente: {response}
+      Respuesta de referencia (golden answer): {reference}
+      Traza completa (para ver qué tools usó y con qué resultado): {agent_data}
+
+      Devolvé tu evaluación como un objeto JSON válido con esta estructura:
       {
-        "score": <integer between 1 and 5>,
-        "explanation": "<detailed string explaining the rationale for the score assigned>"
+        "score": <entero entre 1 y 5>,
+        "explanation": "<en qué coincide y en qué difiere de la referencia>"
       }
-  - name: agent_turn_count
-    custom_function: |
-      def evaluate(instance):
-          turns = (instance.get("agent_data") or {}).get("turns", [])
-          return {'score': len(turns)}
+
+  - name: faithfulness
+    prompt_template: |
+      Sos un evaluador de fidelidad (faithfulness) para un sistema RAG de
+      soporte técnico. Tu única pregunta: ¿la respuesta del agente se basa
+      en la información que efectivamente recuperó (el runbook devuelto por
+      search_runbooks, o el código devuelto por search_codebase, visibles en
+      la traza), o inventó/alucinó datos, IDs, nombres de campos o pasos que
+      no están respaldados por esas herramientas ni por el ticket original?
+
+      Revisá la traza completa: buscá las llamadas a search_runbooks,
+      get_runbook y search_codebase y sus resultados, y comparalos contra lo
+      que el agente afirmó en su respuesta final.
+
+      Escala:
+      1 (No fiel): la respuesta contradice o ignora lo recuperado, o inventa información sin respaldo.
+      2 (Poco fiel): se apoya parcialmente en lo recuperado, pero agrega afirmaciones no respaldadas.
+      3 (Aceptable): mayormente fiel, con alguna generalización menor no crítica.
+      4 (Fiel): toda afirmación técnica está respaldada por el runbook/código recuperado o por el ticket.
+      5 (Totalmente fiel): cada dato (campo, modelo, condición) citado en la respuesta aparece explícitamente en lo recuperado o en el ticket.
+
+      ### Evaluación:
+      Ticket del usuario: {prompt}
+      Respuesta del agente: {response}
+      Traza completa (incluye qué devolvieron search_runbooks / search_codebase): {agent_data}
+
+      Devolvé tu evaluación como un objeto JSON válido con esta estructura:
+      {
+        "score": <entero entre 1 y 5>,
+        "explanation": "<qué afirmaciones están respaldadas y cuáles no>"
+      }
