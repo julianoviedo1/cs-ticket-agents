@@ -25,7 +25,7 @@ CS atiende una taxonomía real de **~70 tipos de ticket** (`issue_type`), docume
 
 ### Objetivos no funcionales
 
-- **Seguridad primero:** ningún agente ejecuta nada en producción en esta versión; todo pasa por un humano.
+- **Seguridad primero:** ningún agente ejecuta nada en producción en esta versión; todo pasa por un usuario.
 - **Agnosticismo de modelo:** el sistema debe funcionar con cualquier proveedor (Gemini, Anthropic, OpenAI, y —en teoría— modelos open-source), intercambiable por configuración.
 - **Costo acotado:** viable de operar con presupuesto de desarrollo mínimo (tier gratuito).
 - **Trazabilidad:** cada resolución debe quedar registrada para retroalimentar el propio sistema.
@@ -43,7 +43,7 @@ Un único agente con acceso a todas las tools sería, en la práctica, un prompt
 - Recuperar runbooks relevantes por similitud semántica (RAG).
 - Recuperar fragmentos del código fuente real cuando el runbook no alcanza (RAG sobre código).
 - Mantener contexto compartido entre el orquestador y el subagente (categoría, entidades detectadas, progreso del diagnóstico) durante la conversación.
-- Permitir que el humano responda con datos de consola y que el agente continúe el diagnóstico sobre la misma sesión.
+- Permitir que el usuario responda con datos de consola y que el agente continúe el diagnóstico sobre la misma sesión.
 - Registrar cada resolución (con o sin runbook aplicable) para retroalimentar el sistema.
 
 **No funcionales**
@@ -64,33 +64,9 @@ Un único agente con acceso a todas las tools sería, en la práctica, un prompt
 
 ## 3. Arquitectura general
 
-```
-                    ┌─────────────────────────────┐
-  Google Chat  ───► │                             │
-  (listener Python,  │                             │
-   Pub/Sub pull)     │                             │
-                    │        root_agent            │
-  Rumi/AppSheet ──► │      (orquestador)           │◄──► servidor MCP propio
-  (webhook Rails,    │   set_ticket_context()       │      (subproceso stdio)
-   cs-tickets-web)   │                             │        │
-                    └──────────────┬──────────────┘        │  RAG (embeddings locales)
-                                   │ transfer_to_agent        │  ├─ search_runbooks
-                                   ▼                          │  ├─ find_similar_tickets
-                    ┌──────────────────────────────┐          │  ├─ search_codebase
-                    │  7 subagentes especializados   │◄─────────┤  └─ log_resolution
-                    │  (idse_sua, nomina, timbrado,  │
-                    │   stp, perfil_empleado,        │
-                    │   config_accesos, general)     │
-                    └──────────────┬──────────────────┘
-                                   │ (pide dato de consola)
-                                   ▼
-                         Humano (CS) — ejecuta en
-                         consola Rails de producción
-                                   │
-                                   ▼
-                         responde con el output,
-                         el subagente continúa
-```
+![Arquitectura general del sistema](docs/architecture.svg)
+
+Un ticket entra vía el listener de Google Chat, el `root_agent` (orquestador) lo clasifica y escribe el contexto en `session.state`, delega a uno de los 7 subagentes especializados, que consultan el servidor MCP propio (RAG sobre runbooks, código fuente y resoluciones) y le piden al usuario de CS un dato de consola cuando hace falta, hasta completar el diagnóstico.
 
 ### Componentes principales
 
@@ -105,8 +81,8 @@ Un único agente con acceso a todas las tools sería, en la práctica, un prompt
 | `runbooks/` | Base de conocimiento en markdown (15 runbooks reales). |
 | `resolutions/index.jsonl` | Índice append-only de tickets resueltos. |
 | `listener/` | Ingesta desde Google Chat (Pub/Sub pull). |
-| `api/local_bridge.py` | Puente HTTP local hacia `cs-tickets-web` (Rails). |
-| `cs-tickets-web/` (repo hermano) | Interfaz Rails + Postgres: tickets, mensajes, adjuntos, webhook de Rumi. No es requisito del TPO; se construyó como extensión de producto. |
+
+> **Nota:** `cs-tickets-web` (interfaz Rails + Postgres, repo hermano) y `api/local_bridge.py` son una extensión de producto en desarrollo paralelo, no forman parte del núcleo evaluado en este TPO — ver sección 12 (Trabajo futuro).
 
 ### Modelos LLM involucrados
 
@@ -147,7 +123,7 @@ Cada subagente comparte una misma estructura (definida en `cs_ticket_agents/sub_
 
 ### Patrón de coordinación
 
-**Orquestación**, no colaboración simétrica: hay una jerarquía clara (root → sub_agents), el orquestador nunca vuelve a intervenir una vez delegado. La delegación usa el mecanismo nativo de ADK (`sub_agents=[...]` + `transfer_to_agent` generado automáticamente), no `AgentTool` — porque queremos que el subagente controle el resto de la conversación con el humano (incluida la espera de un dato de consola), no que el orquestador quede "esperando" un resultado único.
+**Orquestación**, no colaboración simétrica: hay una jerarquía clara (root → sub_agents), el orquestador nunca vuelve a intervenir una vez delegado. La delegación usa el mecanismo nativo de ADK (`sub_agents=[...]` + `transfer_to_agent` generado automáticamente), no `AgentTool` — porque queremos que el subagente controle el resto de la conversación con el usuario (incluida la espera de un dato de consola), no que el orquestador quede "esperando" un resultado único.
 
 ### Uso de state
 
@@ -158,11 +134,11 @@ def set_ticket_context(category, issue_type, detected_entities, tool_context): .
 def record_progress(runbook_id, diagnosis_so_far, pending_question, tool_context): ...
 ```
 
-El orquestador escribe `category`/`issue_type`/`detected_entities` **antes** de delegar; el subagente lee esos valores vía template `{category}` en su instrucción (evitando re-extraerlos del texto), y escribe de vuelta `runbook_id`/`diagnosis_so_far`/`pending_question` al final de cada turno — así, cuando el humano responde con un dato de consola en el turno siguiente, el subagente retoma con contexto ya armado. Validado end-to-end: una corrida real mostró `set_ticket_context` clasificando correctamente `category="nomina"`, `issue_type="payroll-ptu"` y extrayendo `sub_company_id`/`company_subdomain` sin inventar valores, con el `stateDelta` confirmando la escritura real en la sesión de ADK.
+El orquestador escribe `category`/`issue_type`/`detected_entities` **antes** de delegar; el subagente lee esos valores vía template `{category}` en su instrucción (evitando re-extraerlos del texto), y escribe de vuelta `runbook_id`/`diagnosis_so_far`/`pending_question` al final de cada turno — así, cuando el usuario responde con un dato de consola en el turno siguiente, el subagente retoma con contexto ya armado. Validado end-to-end: una corrida real mostró `set_ticket_context` clasificando correctamente `category="nomina"`, `issue_type="payroll-ptu"` y extrayendo `sub_company_id`/`company_subdomain` sin inventar valores, con el `stateDelta` confirmando la escritura real en la sesión de ADK.
 
 ### Sesiones
 
-`InMemorySessionService` de ADK a nivel de conversación (efímera, vive mientras el proceso está arriba). La persistencia a nivel producto —qué ticket corresponde a qué `session_id`, y el historial legible por humanos— la resuelve `cs-tickets-web` (Postgres), guardando `session.session_id` de ADK junto al ticket para poder continuar la conversación en un siguiente request HTTP. Es una decisión deliberada: no forzar que el *state* interno de ADK viva en la misma base de datos que el modelo de producto de Rails (ver sección 9, trade-off).
+`InMemorySessionService` de ADK a nivel de conversación (efímera, vive mientras el proceso está arriba): el `session_id` que devuelve cada corrida (`agents-cli run --session-id ...`) es la única forma de continuar una conversación con contexto ya armado. No hay, por ahora, persistencia a nivel de producto (qué ticket corresponde a qué `session_id`, historial legible entre sesiones) — es un problema de producto, no de este TPO, y queda documentado como trabajo futuro (sección 12): la idea es que `cs-tickets-web` (Rails + Postgres, en desarrollo paralelo) guarde ese mapeo el día que se integre.
 
 ---
 
@@ -223,7 +199,7 @@ El webhook de ingesta desde Rumi/AppSheet (`cs-tickets-web`, `WebhooksController
 
 ### Aislamiento entre agentes / control de acceso
 
-El control de acceso más importante del sistema es **arquitectónico, no un chequeo puntual**: en esta versión, ningún agente tiene ninguna tool de escritura ni ejecución contra producción. La única forma de que algo llegue a ejecutarse es que un humano lea la propuesta y la corra él mismo. Este diseño de mínimo privilegio por construcción es, en la práctica, más robusto que cualquier guardrail de prompt.
+El control de acceso más importante del sistema es **arquitectónico, no un chequeo puntual**: en esta versión, ningún agente tiene ninguna tool de escritura ni ejecución contra producción. La única forma de que algo llegue a ejecutarse es que un usuario lea la propuesta y la corra él mismo. Este diseño de mínimo privilegio por construcción es, en la práctica, más robusto que cualquier guardrail de prompt.
 
 ### Manejo de datos sensibles
 
@@ -235,7 +211,7 @@ El texto del ticket (con PII real de empleados: nombres, salarios, IDs) sale hac
 
 ### Golden Cases
 
-Dos casos reales, tomados de resoluciones efectivas del equipo de CS (anonimizados los nombres de cliente donde correspondía), cada uno con su `reference` (la respuesta real que dio un humano) como golden answer:
+Dos casos reales, tomados de resoluciones efectivas del equipo de CS (anonimizados los nombres de cliente donde correspondía), cada uno con su `reference` (la respuesta real que dio un usuario) como golden answer:
 
 1. **`activar_ptu_registro_patronal`** — activación de PTU bloqueada por un `ProfitSharingPayment` del año anterior.
 2. **`planchar_horas_extras_exento_gravado`** — fijar manualmente exento/gravado de horas extras desde un Excel del cliente.
@@ -282,7 +258,7 @@ Durante la construcción del pipeline de evaluación se encontró y resolvió un
 | **`state` vía tools dedicadas, no vía `output_key`** | `output_key` solo permite guardar un string por turno bajo una clave; nuestro contrato necesita escribir varios campos estructurados a la vez (categoría + issue_type + entidades; o runbook_id + diagnóstico + pregunta pendiente) — de ahí `set_ticket_context`/`record_progress` como tools con acceso a `tool_context.state`. |
 | **Un `McpToolset` por subagente, no uno compartido** | Se probó compartir una única instancia entre los 7 subagentes (para evitar indexar el código 7 veces) — la conexión MCP se comportó de forma inconsistente (tools no listadas en algunos agentes). Se revirtió a una instancia por subagente, priorizando corrección sobre eficiencia, con la redundancia documentada como trabajo futuro. |
 | **RAG con embeddings locales, no la API de embeddings de un proveedor** | Evita sumar otro consumidor más a una cuota ya escasa; el corpus es chico, el costo de indexar en CPU es marginal y se paga una sola vez por proceso. |
-| **Sesión de ADK en memoria + historial de producto en Postgres (Rails)** | Son necesidades distintas: `session.state` es un mecanismo *dentro* de una conversación de ADK; la persistencia de "qué ticket corresponde a qué sesión" y el historial legible por humanos es un problema de producto, no de framework — se resolvió en la capa de Rails sin acoplar el esquema interno de ADK al esquema de negocio. |
+| **Sesión de ADK en memoria, sin persistencia de producto por ahora** | `session.state` es un mecanismo *dentro* de una conversación de ADK; la persistencia de "qué ticket corresponde a qué sesión" y el historial legible por el equipo es un problema de producto, no de framework — se deja fuera del núcleo del TPO deliberadamente, para no acoplar el esquema interno de ADK al esquema de negocio de Rails antes de tiempo (ver Trabajo futuro). |
 | **Guardrail de salida calibrado contra los propios runbooks** | Un guardrail que bloquea cualquier `destroy_all` sería inútil en este dominio (el patrón aparece legítimamente en runbooks reales) — se diseñó para distinguir alcance acotado (asociación) de alcance total (clase), no solo la presencia de la palabra. |
 
 ---
@@ -292,8 +268,8 @@ Durante la construcción del pipeline de evaluación se encontró y resolvió un
 - **Costo vs. calidad de modelo:** Gemini gratuito es viable para desarrollo pero con cuota muy restrictiva (20 req/día); modelos open-source gratuitos vía Groq resultaron más baratos pero con problemas reales de compatibilidad de tool-calling en un flujo agéntico multi-turno (ver Limitaciones) — el sistema queda preparado para cualquiera de las dos rutas, pero hoy Gemini/Claude son la opción confiable para producción.
 - **Cantidad de agentes vs. complejidad:** 7 subagentes reflejan mejor la realidad del negocio que 3, a costa de más superficie para mantener (7 instrucciones, 7 procesos MCP potenciales, 7 variables de modelo) — se aceptó el costo porque la alternativa (agentes de dominio demasiado amplio) es peor para la precisión del diagnóstico.
 - **Rapidez vs. precisión en RAG:** embeddings semánticos son más rápidos de consultar que un índice híbrido, pero pueden priorizar un documento semánticamente cercano por sobre el léxicamente exacto (caso PTU documentado en sección 5) — se aceptó por ahora, con retrieval híbrido como mejora futura.
-- **Autonomía vs. control humano:** el diseño es deliberadamente conservador — cero autonomía de ejecución en v1. Esto reduce el valor inmediato (todavía hace falta un humano para cada corrección) a cambio de eliminar la clase de riesgo más grave (un agente ejecutando algo destructivo en producción de nómina real).
-- **Memoria persistente vs. costo/complejidad:** no se implementó memoria de largo plazo entre sesiones (más allá del historial de producto en Postgres) — se prefirió mantener el `state` de ADK simple y acotado a una conversación, dejando memoria cross-session como trabajo futuro explícito.
+- **Autonomía vs. control del usuario:** el diseño es deliberadamente conservador — cero autonomía de ejecución en v1. Esto reduce el valor inmediato (todavía hace falta un usuario para cada corrección) a cambio de eliminar la clase de riesgo más grave (un agente ejecutando algo destructivo en producción de nómina real).
+- **Memoria persistente vs. costo/complejidad:** no se implementó memoria de largo plazo entre sesiones ni persistencia de producto (`cs-tickets-web` todavía no guarda ese mapeo) — se prefirió mantener el `state` de ADK simple y acotado a una conversación, dejando memoria cross-session como trabajo futuro explícito.
 
 ---
 
@@ -316,7 +292,7 @@ Durante la construcción del pipeline de evaluación se encontró y resolvió un
 - **Retrieval híbrido (keyword + semántico)** para RAG, mitigando el caso documentado donde el embedding prioriza un documento semánticamente cercano pero no el más exacto.
 - **Servidor MCP persistente compartido** (en vez de un subproceso por subagente) para eliminar la redundancia de indexado — requeriría entender por qué la instancia compartida se comportó de forma inconsistente en las pruebas.
 - **Memoria de largo plazo** (Memory Bank de ADK o equivalente) para que un agente recuerde patrones de un cliente específico entre tickets, no solo dentro de una sesión.
-- **Human-in-the-Loop formalizado** en la UI de `cs-tickets-web`: hoy la aprobación es implícita (el humano lee y decide ejecutar por su cuenta); el paso natural es un botón explícito de aprobar/rechazar antes de que el sistema (en una v2 con ejecución real) corra algo.
+- **Human-in-the-Loop formalizado** en la UI de `cs-tickets-web`: hoy la aprobación es implícita (el usuario lee y decide ejecutar por su cuenta); el paso natural es un botón explícito de aprobar/rechazar antes de que el sistema (en una v2 con ejecución real) corra algo.
 - **Protocolo A2A** (simulado): un agente de otra organización (ej. el proveedor de STP) podría exponerse como agente remoto para consultas cross-organización.
 - **Modelo de Machine Learning clásico** para pre-clasificación de tickets (complementando al LLM orquestador con un clasificador entrenado, más barato y determinístico para el caso común).
 - **Inferencia con múltiples proveedores validados:** completar la validación de Claude y OpenAI vía LiteLLM (hoy solo Gemini está probado sin fallas de tool-calling).
@@ -328,4 +304,4 @@ Durante la construcción del pipeline de evaluación se encontró y resolvió un
 
 ## 13. Conclusiones
 
-El sistema demuestra que un diseño multiagente con delegación clara (orquestador liviano + subagentes de dominio) es superior a un chatbot monolítico con tools cuando el dominio real tiene la heterogeneidad que tiene el soporte técnico de un SaaS de nómina: 7 especialidades técnicamente distintas, cada una con su propio vocabulario y sus propios riesgos. La combinación de **state compartido** (para no perder contexto entre el clasificador y el especialista), **RAG sobre dos corpus complementarios** (conocimiento curado y código fuente real) y **guardrails calibrados contra el propio dominio** (no genéricos) produjo un sistema que, incluso sin haber podido correr la evaluación final por restricciones de cuota, quedó validado punto por punto a nivel mecánico durante el desarrollo — con cada bug y cada limitación encontrados documentados como tal, no ocultados. La decisión más importante del proyecto no fue técnica sino de diseño de seguridad: mantener al sistema en modo solo-diagnóstico, con un humano como única puerta de ejecución, es lo que permite que el resto de las decisiones (modelo, framework, agentes) se puedan iterar rápido sin poner en riesgo un sistema de nómina real.
+El sistema demuestra que un diseño multiagente con delegación clara (orquestador liviano + subagentes de dominio) es superior a un chatbot monolítico con tools cuando el dominio real tiene la heterogeneidad que tiene el soporte técnico de un SaaS de nómina: 7 especialidades técnicamente distintas, cada una con su propio vocabulario y sus propios riesgos. La combinación de **state compartido** (para no perder contexto entre el clasificador y el especialista), **RAG sobre dos corpus complementarios** (conocimiento curado y código fuente real) y **guardrails calibrados contra el propio dominio** (no genéricos) produjo un sistema que, incluso sin haber podido correr la evaluación final por restricciones de cuota, quedó validado punto por punto a nivel mecánico durante el desarrollo — con cada bug y cada limitación encontrados documentados como tal, no ocultados. La decisión más importante del proyecto no fue técnica sino de diseño de seguridad: mantener al sistema en modo solo-diagnóstico, con un usuario como única puerta de ejecución, es lo que permite que el resto de las decisiones (modelo, framework, agentes) se puedan iterar rápido sin poner en riesgo un sistema de nómina real.
